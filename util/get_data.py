@@ -7,6 +7,9 @@ import datetime
 import glob
 import os
 
+from util import config
+from util import mapping
+
 
 def search_ridewithgps(start_location:str = 'Shokan, NY', distance_from_start:float = 25.):
     """ Call the Ride with GPS API in a loop to get all results fitting search parameters
@@ -23,7 +26,7 @@ def search_ridewithgps(start_location:str = 'Shokan, NY', distance_from_start:fl
         print('{} of {} results collected'.format(total_results - results_remaining, total_results))
         d_more, n = ridewithgps_api_search(
             start_location=start_location, distance_from_start=distance_from_start,
-            length_min=metres_to_miles(d[-1][d[-1]['type']]['distance']),
+            length_min=mapping.metres_to_miles(d[-1][d[-1]['type']]['distance']),
             max_results=min(results_remaining, 300)
         )
         d += d_more
@@ -41,10 +44,6 @@ def parse_ridewithgps_search_results(ridewgps_search):
 
     return pd.DataFrame(trips_list), pd.DataFrame(routes_list)
 
-
-def metres_to_miles(dist:float):
-    """ Convert metres to miles (1609.3 metres to the mile) """
-    return dist / 1609.34
 
 def ridewithgps_api_search(keywords:str='', start_location:str='Portland, OR',
                            distance_from_start:float=15., elevation_max:float=200000.,
@@ -118,15 +117,58 @@ def ridewithgps_api_search(keywords:str='', start_location:str='Portland, OR',
 
     r = requests.get(url = URL, params = PARAMS)
 
-    raw_data_path = '/home/emily/Documents/ViewFinder/data/raw/'
-    if not os.path.isdir(raw_data_path + 'ridewgps/'):
-        os.mkdir(raw_data_path + 'ridewgps/')
-    filename = '{}ridewgps/rwg_{}_'.format(raw_data_path,
+    data = r.json()
+
+    return data['results'], data['results_count']
+
+def write_ridewithgps_request(data, label:str):
+    if not os.path.isdir(config.RAW_DATA_PATH + 'ridewgps/'):
+        os.mkdir(config.RAW_DATA_PATH + 'ridewgps/')
+    filename = '{}ridewgps/rwg_{}_{}_'.format(config.RAW_DATA_PATH, label,
                                            datetime.date.today().strftime("%Y-%m-%d"))
     fns = glob.glob(filename + '*')
     filename += str(len(fns))
     with open(filename, mode='wb') as localfile:
-        localfile.write(r.content)
-    data = r.json()
+        localfile.write(data.content)
 
-    return data['results'], data['results_count']
+
+def ridewithgps_api_route(rte_id:int):
+
+    URL = "http://ridewithgps.com/routes/{}.json".format(rte_id)
+    r = requests.get(url = URL)
+
+    write_ridewithgps_request(r, 'route')
+    d = r.json()
+    df = pd.DataFrame(d['track_points'])
+    if not os.path.isdir(config.RAW_DATA_PATH + 'ridewgps/routes/'):
+        os.mkdir(config.RAW_DATA_PATH + 'ridewgps/routes/')
+    df.to_csv('{}ridewgps/routes/{}.csv'.format(config.RAW_DATA_PATH, rte_id))
+
+
+
+def interpret_ridewithgps_codes():
+    """
+    """
+
+    pavement_type_id = {1: 'beautiful pavement',
+                        2: 'normal pavement',
+                        3: 'terrible pavement',
+                        4: 'mostly paved',
+                        5: 'mostly unpaved',
+                        6: 'completely unpaved',
+                        7: 'mixed (on/off road)'}
+
+    best_for_id = {1: 'Riding a motorcycle', # field in routes
+                   2: 'Driving',
+                   3: 'Cycling',
+                   4: 'Mountain biking',
+                   5: 'Running',
+                   6: 'Hiking',
+                   7: 'Longboarding',
+                   9: 'Recumbent cycling',
+                   10: 'Cyclocross biking',
+                   29: 'Stationary cycling',
+                   30: 'Other'}
+
+    recreation_type_ids = {} # same as best_for_id, but can have list
+    poi_type = {} # field in individual route .points_of_interest
