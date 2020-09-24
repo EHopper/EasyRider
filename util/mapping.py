@@ -11,6 +11,9 @@ def metres_to_miles(dist:float):
     """ Convert metres to miles (1609.3 metres to the mile) """
     return dist / 1609.34
 
+def metres_to_feet(dist:float):
+    return dist * 3.281
+
 def km_to_mi(dist:float):
     return metres_to_miles(dist) * 1e3
 
