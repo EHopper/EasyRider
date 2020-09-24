@@ -131,7 +131,6 @@ def write_ridewithgps_request(data, label:str):
     with open(filename, mode='wb') as localfile:
         localfile.write(data.content)
 
-
 def ridewithgps_api_route(rte_id:int):
 
     URL = "http://ridewithgps.com/routes/{}.json".format(rte_id)
@@ -144,7 +143,23 @@ def ridewithgps_api_route(rte_id:int):
         os.mkdir(config.RAW_DATA_PATH + 'ridewgps/routes/')
     df.to_csv('{}ridewgps/routes/{}.csv'.format(config.RAW_DATA_PATH, rte_id))
 
+def ridewithgps_api_trip(rte_id:int):
 
+    URL = "http://ridewithgps.com/trips/{}.json".format(rte_id)
+    r = requests.get(url = URL)
+
+    # write_ridewithgps_request(r, 'route')
+    d = r.json()
+    if 'track_points' not in d:
+        return
+
+    df = pd.DataFrame(d['track_points'])
+    if not os.path.isdir(config.RAW_DATA_PATH + 'ridewgps/trips/'):
+        os.mkdir(config.RAW_DATA_PATH + 'ridewgps/trips/')
+    df.to_csv('{}ridewgps/trips/{}.csv'.format(config.RAW_DATA_PATH, rte_id))
+    filename = '{}ridewgps/trips/{}'.format(config.RAW_DATA_PATH, rte_id)
+    with open(filename, mode='wb') as localfile:
+        localfile.write(r.content)
 
 def interpret_ridewithgps_codes():
     """

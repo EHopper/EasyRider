@@ -17,6 +17,9 @@ def metres_to_feet(dist:float):
 def km_to_mi(dist:float):
     return metres_to_miles(dist) * 1e3
 
+def mps_to_mph(speed:float):
+    return metres_to_miles(speed) * 60 * 60
+
 def approx_dist_lat_lon(lat1, lon1, lat2, lon2):
     """ Give approximate distance between two lat/lon pairs
 
@@ -66,7 +69,7 @@ def dist_lat_lon(lat1, lon1, lat2, lon2):
 
     a = (np.sin(d_lat / 2) ** 2
         + np.cos(lat1) * np.cos(lat2) * np.sin(d_lon / 2) ** 2)
-    return radius * 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a)) ** 2
+    return radius * 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
 
 
 class LatLonHandler(osmium.SimpleHandler):

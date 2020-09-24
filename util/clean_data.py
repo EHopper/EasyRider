@@ -139,3 +139,8 @@ def rwgps_strtime(x:str):
 def check_missing(df):
     for col in df.columns:
         print('{}: {} missing of {}'.format(col, df[col].isna().sum(), df.shape[0]))
+
+def moving_window_average(t_series, N=5):
+  # Calculate average over moving window
+  # N: number of points to average over
+  return np.convolve(t_series, np.ones((N, )) / N, mode='same')
