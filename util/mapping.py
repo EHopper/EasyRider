@@ -17,6 +17,9 @@ def metres_to_feet(dist:float):
 def km_to_mi(dist:float):
     return metres_to_miles(dist) * 1e3
 
+def feet_to_miles(dist:float):
+    return dist / 5280
+
 def mps_to_mph(speed:float):
     return metres_to_miles(speed) * 60 * 60
 

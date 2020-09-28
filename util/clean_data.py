@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import datetime
 import re
+import pathlib
 
 
 from util import config
@@ -53,6 +54,7 @@ def filter_trips(df):
     MAX_AVERAGE_SPEED = 25
     MAX_SPEED = 50
     MAX_DISTANCE = 125
+    MAX_AVG_SLOPE = 12
 
     return df[((df['is_stationary'] == False)
                & (MIN_TIME < df['moving_time'])
@@ -62,7 +64,14 @@ def filter_trips(df):
                & (df['distance'] < MAX_DISTANCE)
                & (MIN_AVERAGE_SPEED < df['avg_speed'])
                & (df['avg_speed'] < MAX_AVERAGE_SPEED)
-               & (df['max_speed'] < MAX_SPEED))].reset_index(drop=True)
+               & (df['max_speed'] < MAX_SPEED)
+               & (df['avg_slope'] < MAX_AVG_SLOPE))].reset_index(drop=True)
+
+def filter_cleaned_trips(df):
+    csv_directory = pathlib.Path(config.CLEAN_TRIPS_PATH)
+    clean_trip = [rte_id.stem for rte_id in csv_directory.glob('*.csv')]
+    return df[(df['id'].isin(clean_trip))]
+
 
 def clean_trips(df):
     """
@@ -107,6 +116,8 @@ def clean_ridewgps_rides(df):
     df['if_updated'] = df['update_days'] > 0
 
     df['elevation_net'] = df['elevation_gain'] - df['elevation_loss']
+    df['elevation_total'] = df['elevation_gain'] + df['elevation_loss']
+    df['avg_slope'] = mapping.feet_to_miles(df['elevation_total']) / df['distance'] * 100
 
     df['photos'] = df['highlighted_photo_id'] > 0
 
@@ -144,3 +155,37 @@ def moving_window_average(t_series, N=5):
   # Calculate average over moving window
   # N: number of points to average over
   return np.convolve(t_series, np.ones((N, )) / N, mode='same')
+
+
+def clean_single_trip(df):
+
+    WINDOW_LENGTH_SPEED = 50
+    WINDOW_LENGTH_SLOPE = 50
+
+    important_cols = ['y','x','e','t']
+    if set(important_cols) - set(df.columns):
+        return pd.DataFrame()
+    df = df[important_cols].dropna().reset_index(drop=True)
+    df.rename(columns={'y':'lat', 'x':'lon', 'e':'elevation', 't':'time'}, inplace=True)
+
+    # Calculate distance
+    offset = df.iloc[1:][['lat', 'lon']].copy()
+    offset = offset.append(offset.iloc[-1]).reset_index(drop=True)
+    df['dist'] = mapping.dist_lat_lon(df['lat'], df['lon'],
+                                      offset['lat'], offset['lon'])
+    df['cum_dist'] = np.cumsum(df['dist']) # these are in miles
+
+    # Calculate time and speed
+    df['time'] = df['time'] - df['time'].min()
+    dt = df['time'].diff() / 60 / 60
+    dt.at[0] = dt[1]
+    df['speed'] = moving_window_average(df['dist'] / dt, WINDOW_LENGTH_SPEED) # mph
+
+    # Calculate slope
+    df['slope'] = mapping.metres_to_miles(df['elevation'].diff()) / df['dist'] * 100
+    df['slope'].fillna(0, inplace=True)
+    df.at[df['dist'] == 0, 'slope'] = 0
+    df['slope'] = moving_window_average(df['slope'], WINDOW_LENGTH_SLOPE)
+
+
+    return df#.dropna()
