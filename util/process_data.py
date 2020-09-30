@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 
 import sklearn.preprocessing
+import sklearn.neighbors
 
 from util import config
 from util import mapping
@@ -36,12 +37,31 @@ def scale_dataset(df, column_importance):
 
     return df
 
+def remove_scaling(df):
+    # Scaling is ((X - mean) / std ) * column_importance
+    scaler = pd.read_csv(config.MODEL_PATH + 'feature_scaling.csv', index_col=0)
+    df_unscale = df.copy()
+    for col in scaler.columns:
+        df_unscale[col] = (df_unscale[col] / scaler.loc['column_importance', col]
+                    * scaler.loc['std', col] + scaler.loc['mean', col])
+
+    return df_unscale
+
 def apply_scaling(df):
     # Scaling is ((X - mean) / std ) * column_importance
     scaler = pd.read_csv(config.MODEL_PATH + 'feature_scaling.csv', index_col=0)
-
+    df_scale = df.copy()
     for col in scaler.columns:
-        df[col] = ((df[col] - scaler.loc['mean', col]) / scaler.loc['std', col]
-                   * scaler.loc['column_importance', col])
+        df_scale[col] = ((df_scale[col] - scaler.loc['mean', col])
+                            / scaler.loc['std', col]
+                            * scaler.loc['column_importance', col])
 
-    return df
+    return df_scale
+
+def calc_distance_from_start(lat, lon):
+
+    grid_pts, grid_dict = clean_data.load_gridpts(
+        'road_backbone_merged', 'grid_rte_ids_merged'
+    )
+
+    tree = sklearn.neighbors.KDTree(grid_pts[['lat', 'lon']])

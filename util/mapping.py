@@ -14,6 +14,13 @@ def metres_to_miles(dist:float):
 def metres_to_feet(dist:float):
     return dist * 3.281
 
+def degrees_to_miles_ish(dist:float):
+    """ Convert degrees lat/lon to miles, approximately """
+    deg_lat = 69.1 # dist_lat_lon(42, 74, 43, 74)
+    deg_lon = 51.3 # dist_lat_lon(42, 73, 42, 74)
+    return dist * 60.2 #np.mean((deg_lat, deg_lon))
+
+
 def km_to_mi(dist:float):
     return metres_to_miles(dist) * 1e3
 

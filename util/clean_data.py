@@ -5,7 +5,12 @@ import numpy as np
 import datetime
 import re
 import pathlib
+import joblib
+import os
+import collections
+import json
 
+import sklearn.neighbors
 
 from util import config
 from util import mapping
@@ -189,3 +194,175 @@ def clean_single_trip(df):
 
 
     return df#.dropna()
+
+def make_road_backbone():
+    PTS_PER_DEGREE = 75
+    locs, tree = initialise_road_backbone_grid(PTS_PER_DEGREE, 'kdTree_locs_coarse')
+
+    df = pd.read_csv(config.PROCESSED_DATA_PATH + 'trips.csv')
+    df = filter_cleaned_trips(df)
+
+    grid_pts = pd.DataFrame(columns=['grid_i', 'lat', 'lon', 'breadcrumb_count'])
+    grid_dict = collections.defaultdict(set)
+    print('Looping through route IDs')
+    for i, rte_id in enumerate(df['id'].tolist()):
+        if not i % 100: print(i)
+        rte_pts = assign_trip_to_backbone_grid(rte_id, locs, tree)
+        grid_pts = add_rte_info_to_grid(grid_pts, rte_pts)
+        add_rte_info_to_grid_dict(grid_dict, rte_pts, rte_id)
+
+    grid_pts['n_routes'] = [len(grid_dict[key]) for key in grid_dict]
+    save_gridpts(grid_pts, grid_dict, 'road_backbone_coarse', 'grid_rte_ids_coarse')
+    print('Total points: {}'.format(grid_pts.shape[0]))
+    tidy_road_backbone(grid_pts, grid_dict, PTS_PER_DEGREE)
+    print('Merged points: {}'.format(grid_pts.shape[0]))
+    save_gridpts(grid_pts, grid_dict, 'road_backbone_coarse', 'grid_rte_ids_coarse')
+
+
+    return grid_pts, grid_dict
+
+def assign_trip_to_backbone_grid(rte_id, locs, tree):
+
+    rte = pd.read_csv(config.CLEAN_TRIPS_PATH + '{}.csv'.format(rte_id))
+    # Find nearest neighbours among grid points
+    d, i = tree.query(rte[['lat', 'lon']])
+    rte['grid_i'] = i
+
+    grid_pts = rte.groupby('grid_i')[['lat', 'lon']].agg(['mean', 'count'])
+    grid_pts.columns = ['lat', 'breadcrumb_count', 'lon', 'duplicate']
+
+    return grid_pts[['lat', 'lon', 'breadcrumb_count']].reset_index()
+
+def tidy_road_backbone(grid_pts, grid_dict, PTS_PER_DEGREE):
+    """ Merge grid points that are closer together than some threshold
+    """
+    MIN_DISTANCE = 1/(2 * PTS_PER_DEGREE) # in degrees, i.e. about 60 m
+
+    tree = sklearn.neighbors.KDTree(grid_pts[['lat', 'lon']])
+
+    grid_pts.reset_index(inplace=True)
+    print('Looping through grid points')
+    for ii, row in grid_pts.iterrows():
+
+        if not ii % 5000: print(ii)
+        if row['breadcrumb_count'] == 0: # If row has already been merged, skip it
+            continue
+
+            neighbours, _ = tree.query_radius(
+                row[['lat', 'lon']].values.reshape(1, -1), r=MIN_DISTANCE
+            )
+            neighbours = list(neighbours)
+            neighbours.remove(ii) # Take the point itself out of the list
+
+            for pt in neighbours:
+                id0 = int(grid_pts.at[ii, 'grid_i'])
+                id1 = int(grid_pts.at[ii, 'grid_i'])
+                ct0 = int(grid_pts.at[ii, 'breadcrumb_count'])
+                ct1 = int(grid_pts.at[ii, 'breadcrumb_count'])
+
+                if ct1 == 0: # If this point has already been merged to another
+                    continue
+
+                grid_pts.at[ii, 'lat'] = (
+                    (grid_pts.at[ii, 'lat'] * ct0 + grid_pts.at[pt, 'lat'] * ct1)
+                    / (ct0 + ct1)
+                )
+                grid_pts.at[ii, 'lon'] = (
+                    (grid_pts.at[ii, 'lon'] * ct0 + grid_pts.at[pt, 'lon'] * ct1)
+                    / (ct0 + ct1)
+                )
+                grid_pts.at[ii, 'breadcrumb_count'] = ct0 + ct1
+                grid_pts.at[pt, 'breadcrumb_count'] = 0 # Zero out other entry
+
+                # Merge the dictionary entry
+                grid_dict[id0] = grid_dict[id0].union(grid_dict[id1])
+                grid_dict[id1] = set() # Zero out the other entry
+
+                grid_pts.at[ii, 'n_routes'] = len(dict_m[id0])
+
+        zeroed = [k for k, v in grid_dict.items() if not v]
+        for k in zeroed:
+            del grid_dict[k]
+
+def save_rte_pts(grid_dict, dict_filename):
+    rte_dict = collections.defaultdict(list)
+    for grid_id, rte_set in grid_dict.items():
+        for rte_id in rte_set:
+            rte_dict[rte_id] += [grid_id]
+
+    with open(config.MODEL_PATH + dict_filename + '.json', 'w') as fp:
+        json.dump(rte_dict, fp)
+
+def load_rte_pts(dict_filename):
+    with open(config.MODEL_PATH + dict_filename + '.json', 'r') as fn:
+        rd = json.load(fn)
+    route_dict = dict()
+    for key in rd:
+        route_dict[int(key)] = rd[key]
+
+    return route_dict
+
+
+def save_gridpts(df, setdict, df_filename, dict_filename):
+    # Save files
+    df.to_csv(config.MODEL_PATH + df_filename + '.csv', index=False)
+    gd = dict.fromkeys(setdict.keys())
+    for key in gd:
+        gd[key] = list(setdict[key])
+    with open(config.MODEL_PATH + dict_filename + '.json', 'w') as fp:
+        json.dump(gd, fp)
+
+def load_gridpts(df_filename, dict_filename):
+    grid_pts = pd.read_csv(config.MODEL_PATH + df_filename + '.csv')
+    with open(config.MODEL_PATH + dict_filename + '.json', 'r') as fn:
+        gd = json.load(fn)
+    grid_dict = collections.defaultdict(set)
+    for key in gd:
+        grid_dict[int(key)] = set(gd[key])
+
+    return grid_pts, grid_dict
+
+
+def add_rte_info_to_grid_dict(grid_dict, rte_pts, rte_id):
+    for grid_pt in rte_pts['grid_i'].tolist():
+        grid_dict[grid_pt].add(rte_id)
+
+
+def add_rte_info_to_grid(grid_pts, rte_pts):
+    """ Joined dataframes and take the weighted average of the lat/lon
+
+    Note that it assumes any nans are from the outer join missing values ONLY
+    """
+
+    joined = pd.merge(grid_pts, rte_pts, on='grid_i', how='outer').fillna(0)
+    joined['breadcrumb_count'] = joined.breadcrumb_count_x + joined.breadcrumb_count_y
+    joined['lat'] = ((joined.lat_x * joined.breadcrumb_count_x
+                      + joined.lat_y * joined.breadcrumb_count_y)
+                    / joined['breadcrumb_count'])
+    joined['lon'] = ((joined.lon_x * joined.breadcrumb_count_x
+                      + joined.lon_y * joined.breadcrumb_count_y)
+                    / joined['breadcrumb_count'])
+
+
+    return joined[['grid_i', 'lat', 'lon', 'breadcrumb_count']]
+
+
+
+def initialise_road_backbone_grid(pts_per_degree:int, tree_fname:str):
+
+    LAT_RANGE = (40., 44.)
+    LON_RANGE = (-76., -72.)
+
+    lats = np.linspace(LAT_RANGE[0], LAT_RANGE[1],
+                        pts_per_degree * int((np.ptp(LAT_RANGE))))
+    lons = np.linspace(LON_RANGE[0], LON_RANGE[1],
+                        pts_per_degree * int((np.ptp(LON_RANGE))))
+    all_lats, all_lons = np.meshgrid(lats, lons)
+    all_lats = all_lats.flatten().tolist()
+    all_lons = all_lons.flatten().tolist()
+    locs = pd.DataFrame({'lat': all_lats, 'lon': all_lons})
+
+    tree = sklearn.neighbors.KDTree(locs)
+    joblib.dump(tree, config.MODEL_PATH + tree_fname + '.joblib')
+
+    return locs, tree
