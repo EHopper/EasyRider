@@ -73,9 +73,9 @@ def filter_trips(df):
                & (df['avg_slope'] < MAX_AVG_SLOPE))].reset_index(drop=True)
 
 def filter_cleaned_trips(df):
-    csv_directory = pathlib.Path(config.CLEAN_TRIPS_PATH)
-    clean_trip = [rte_id.stem for rte_id in csv_directory.glob('*.csv')]
-    return df[(df['id'].isin(clean_trip))]
+    feather_directory = pathlib.Path(config.CLEAN_TRIPS_PATH)
+    clean_trip = [rte_id.stem for rte_id in feather_directory.glob('*.feather')]
+    return df[(df['rte_id'].isin(clean_trip))]
 
 
 def clean_trips(df):
@@ -195,48 +195,47 @@ def clean_single_trip(df):
 
     return df#.dropna()
 
-def make_road_backbone():
-    PTS_PER_DEGREE = 75
-    locs, tree = initialise_road_backbone_grid(PTS_PER_DEGREE, 'kdTree_locs_coarse')
+def make_road_backbone(grid_fname, rtes_at_grid_fname, pts_per_degree):
+    # PTS_PER_DEGREE = 75
+    locs, tree = initialise_road_backbone_grid(pts_per_degree, 'kdTree_locs_{}'.format(pts_per_degree))
 
-    df = pd.read_csv(config.PROCESSED_DATA_PATH + 'trips.csv')
-    df = filter_cleaned_trips(df)
+    df = pd.read_feather(config.PROCESSED_DATA_PATH + 'trips_culled.feather')
 
-    grid_pts = pd.DataFrame(columns=['grid_i', 'lat', 'lon', 'breadcrumb_count'])
+    grid_pts = pd.DataFrame(columns=['grid_id', 'lat', 'lon', 'breadcrumb_count'])
     grid_dict = collections.defaultdict(set)
     print('Looping through route IDs')
-    for i, rte_id in enumerate(df['id'].tolist()):
+    for i, rte_id in enumerate(df['rte_id'].tolist()):
         if not i % 100: print(i)
         rte_pts = assign_trip_to_backbone_grid(rte_id, locs, tree)
         grid_pts = add_rte_info_to_grid(grid_pts, rte_pts)
         add_rte_info_to_grid_dict(grid_dict, rte_pts, rte_id)
 
     grid_pts['n_routes'] = [len(grid_dict[key]) for key in grid_dict]
-    save_gridpts(grid_pts, grid_dict, 'road_backbone_coarse', 'grid_rte_ids_coarse')
+    save_gridpts(grid_pts, grid_dict, grid_fname, rtes_at_grid_fname)
     print('Total points: {}'.format(grid_pts.shape[0]))
-    tidy_road_backbone(grid_pts, grid_dict, PTS_PER_DEGREE)
-    print('Merged points: {}'.format(grid_pts.shape[0]))
-    save_gridpts(grid_pts, grid_dict, 'road_backbone_coarse', 'grid_rte_ids_coarse')
+    # tidy_road_backbone(grid_pts, grid_dict, pts_per_degree)
+    # print('Merged points: {}'.format(grid_pts.shape[0]))
+    # save_gridpts(grid_pts, grid_dict, grid_fname + 'merged', rtes_at_grid_fname + 'merged')
 
 
     return grid_pts, grid_dict
 
 def assign_trip_to_backbone_grid(rte_id, locs, tree):
 
-    rte = pd.read_csv(config.CLEAN_TRIPS_PATH + '{}.csv'.format(rte_id))
+    rte = pd.read_feather(config.CLEAN_TRIPS_PATH + '{}.feather'.format(rte_id))
     # Find nearest neighbours among grid points
     d, i = tree.query(rte[['lat', 'lon']])
-    rte['grid_i'] = i
+    rte['grid_id'] = i
 
-    grid_pts = rte.groupby('grid_i')[['lat', 'lon']].agg(['mean', 'count'])
+    grid_pts = rte.groupby('grid_id')[['lat', 'lon']].agg(['mean', 'count'])
     grid_pts.columns = ['lat', 'breadcrumb_count', 'lon', 'duplicate']
 
     return grid_pts[['lat', 'lon', 'breadcrumb_count']].reset_index()
 
-def tidy_road_backbone(grid_pts, grid_dict, PTS_PER_DEGREE):
+def tidy_road_backbone(grid_pts, grid_dict, pts_per_degree):
     """ Merge grid points that are closer together than some threshold
     """
-    MIN_DISTANCE = 1/(2 * PTS_PER_DEGREE) # in degrees, i.e. about 60 m
+    MIN_DISTANCE = 1/(2 * pts_per_degree) # in degrees
 
     tree = sklearn.neighbors.KDTree(grid_pts[['lat', 'lon']])
 
@@ -255,8 +254,8 @@ def tidy_road_backbone(grid_pts, grid_dict, PTS_PER_DEGREE):
             neighbours.remove(ii) # Take the point itself out of the list
 
             for pt in neighbours:
-                id0 = int(grid_pts.at[ii, 'grid_i'])
-                id1 = int(grid_pts.at[ii, 'grid_i'])
+                id0 = int(grid_pts.at[ii, 'grid_id'])
+                id1 = int(grid_pts.at[ii, 'grid_id'])
                 ct0 = int(grid_pts.at[ii, 'breadcrumb_count'])
                 ct1 = int(grid_pts.at[ii, 'breadcrumb_count'])
 
@@ -284,14 +283,20 @@ def tidy_road_backbone(grid_pts, grid_dict, PTS_PER_DEGREE):
         for k in zeroed:
             del grid_dict[k]
 
-def save_rte_pts(grid_dict, dict_filename):
+def find_gridpts_at_rte(grid_dict, gridpts_at_rte_fname, pts_per_degree):
     rte_dict = collections.defaultdict(list)
     for grid_id, rte_set in grid_dict.items():
         for rte_id in rte_set:
             rte_dict[rte_id] += [grid_id]
 
-    with open(config.MODEL_PATH + dict_filename + '.json', 'w') as fp:
-        json.dump(rte_dict, fp)
+    gridpts_at_rte = []
+    for k, v in rte_dict.items():
+        gridpts_at_rte += [{'rte_id': k, 'grid_ids': list(v)}]
+
+    gridpts_at_rte = pd.DataFrame(gridpts_at_rte)
+    gridpts_at_rte.to_feather(config.PROCESSED_DATA_PATH
+                            + '{}_{}.feather'.format(gridpts_at_rte_fname, pts_per_degree))
+    return gridpts_at_rte
 
 def load_rte_pts(dict_filename):
     with open(config.MODEL_PATH + dict_filename + '.json', 'r') as fn:
@@ -305,26 +310,33 @@ def load_rte_pts(dict_filename):
 
 def save_gridpts(df, setdict, df_filename, dict_filename):
     # Save files
-    df.to_csv(config.MODEL_PATH + df_filename + '.csv', index=False)
-    gd = dict.fromkeys(setdict.keys())
-    for key in gd:
-        gd[key] = list(setdict[key])
-    with open(config.MODEL_PATH + dict_filename + '.json', 'w') as fp:
-        json.dump(gd, fp)
+    df.to_feather(config.MODEL_PATH + df_filename + '.feather')
+    rts_at_grid = []
+    for k, v in setdict.items():
+        rts_at_grid += [{'grid_id': k, 'rte_ids': list(v)}]
+    rts_at_grid = pd.DataFrame(rts_at_grid)
+    rts_at_grid.to_feather(config.MODEL_PATH + dict_filename + '.feather')
+    # df.to_csv(config.MODEL_PATH + df_filename + '.csv', index=False)
+    # gd = dict.fromkeys(setdict.keys())
+    # for key in gd:
+    #     gd[key] = list(setdict[key])
+    # with open(config.MODEL_PATH + dict_filename + '.json', 'w') as fp:
+    #     json.dump(gd, fp)
 
-def load_gridpts(df_filename, dict_filename):
-    grid_pts = pd.read_csv(config.MODEL_PATH + df_filename + '.csv')
-    with open(config.MODEL_PATH + dict_filename + '.json', 'r') as fn:
-        gd = json.load(fn)
-    grid_dict = collections.defaultdict(set)
-    for key in gd:
-        grid_dict[int(key)] = set(gd[key])
+def load_gridpts(grid_filename, rtes_at_grid_filename):
+    grid_pts = pd.read_feather(config.MODEL_PATH + df_filename + '.feather')
+    rtes_at_grid = pd.read_feather(config.MODEL_PATH + rtes_at_grid_filename + '.feather')
+    # with open(config.MODEL_PATH + dict_filename + '.json', 'r') as fn:
+    #     gd = json.load(fn)
+    # grid_dict = collections.defaultdict(set)
+    # for key in gd:
+    #     grid_dict[int(key)] = set(gd[key])
 
-    return grid_pts, grid_dict
+    return grid_pts, rtes_at_grid
 
 
 def add_rte_info_to_grid_dict(grid_dict, rte_pts, rte_id):
-    for grid_pt in rte_pts['grid_i'].tolist():
+    for grid_pt in rte_pts['grid_id'].tolist():
         grid_dict[grid_pt].add(rte_id)
 
 
@@ -334,7 +346,7 @@ def add_rte_info_to_grid(grid_pts, rte_pts):
     Note that it assumes any nans are from the outer join missing values ONLY
     """
 
-    joined = pd.merge(grid_pts, rte_pts, on='grid_i', how='outer').fillna(0)
+    joined = pd.merge(grid_pts, rte_pts, on='grid_id', how='outer').fillna(0)
     joined['breadcrumb_count'] = joined.breadcrumb_count_x + joined.breadcrumb_count_y
     joined['lat'] = ((joined.lat_x * joined.breadcrumb_count_x
                       + joined.lat_y * joined.breadcrumb_count_y)
@@ -344,14 +356,14 @@ def add_rte_info_to_grid(grid_pts, rte_pts):
                     / joined['breadcrumb_count'])
 
 
-    return joined[['grid_i', 'lat', 'lon', 'breadcrumb_count']]
+    return joined[['grid_id', 'lat', 'lon', 'breadcrumb_count']]
 
 
 
 def initialise_road_backbone_grid(pts_per_degree:int, tree_fname:str):
 
-    LAT_RANGE = (40., 44.)
-    LON_RANGE = (-76., -72.)
+    LAT_RANGE = (40.5, 43.5)
+    LON_RANGE = (-75.5, -72.5)
 
     lats = np.linspace(LAT_RANGE[0], LAT_RANGE[1],
                         pts_per_degree * int((np.ptp(LAT_RANGE))))
@@ -366,3 +378,9 @@ def initialise_road_backbone_grid(pts_per_degree:int, tree_fname:str):
     joblib.dump(tree, config.MODEL_PATH + tree_fname + '.joblib')
 
     return locs, tree
+
+def convert_csv_trip_to_feather(fn):
+    a = pd.read_csv(fn)
+
+    a['rte_id'] = int(fn[:-4].split('/')[-1])
+    a[['rte_id', 'time', 'lat', 'lon', 'elevation', 'dist', 'speed', 'slope']].to_feather(fn[:-4] + '.feather')

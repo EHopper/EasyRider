@@ -2,8 +2,6 @@
 """
 
 import numpy as np
-import math
-import osmium
 
 EARTH_RADIUS = 6371 # km
 # Unit conversions
@@ -50,7 +48,7 @@ def approx_dist_lat_lon(lat1, lon1, lat2, lon2):
     return km_to_mi(np.sqrt(x ** 2 + y ** 2) * EARTH_RADIUS)
 
 def deg_to_rad(phi):
-    return phi * math.pi / 180
+    return phi * np.pi / 180
 
 def dist_lat_lon(lat1, lon1, lat2, lon2):
     """ Better distance calculator
@@ -80,13 +78,3 @@ def dist_lat_lon(lat1, lon1, lat2, lon2):
     a = (np.sin(d_lat / 2) ** 2
         + np.cos(lat1) * np.cos(lat2) * np.sin(d_lon / 2) ** 2)
     return radius * 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
-
-
-class LatLonHandler(osmium.SimpleHandler):
-    def __init__(self):
-        super(LatLonHandler).__init__()
-        self.latlons = []
-
-    def node(self, n):
-        self.latlons.append([o.tags['place']])
-        self.num_nodes += 1
