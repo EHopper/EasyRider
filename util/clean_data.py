@@ -178,7 +178,7 @@ def clean_single_trip(df):
     offset = offset.append(offset.iloc[-1]).reset_index(drop=True)
     df['dist'] = mapping.dist_lat_lon(df['lat'], df['lon'],
                                       offset['lat'], offset['lon'])
-    df['cum_dist'] = np.cumsum(df['dist']) # these are in miles
+    # df['cum_dist'] = np.cumsum(df['dist']) # these are in miles
 
     # Calculate time and speed
     df['time'] = df['time'] - df['time'].min()
@@ -195,16 +195,14 @@ def clean_single_trip(df):
 
     return df#.dropna()
 
-def make_road_backbone(grid_fname, rtes_at_grid_fname, pts_per_degree):
+def make_road_backbone(rte_ids, grid_fname, rtes_at_grid_fname, pts_per_degree):
     # PTS_PER_DEGREE = 75
     locs, tree = initialise_road_backbone_grid(pts_per_degree, 'kdTree_locs_{}'.format(pts_per_degree))
-
-    df = pd.read_feather(config.PROCESSED_DATA_PATH + 'trips_culled.feather')
 
     grid_pts = pd.DataFrame(columns=['grid_id', 'lat', 'lon', 'breadcrumb_count'])
     grid_dict = collections.defaultdict(set)
     print('Looping through route IDs')
-    for i, rte_id in enumerate(df['rte_id'].tolist()):
+    for i, rte_id in enumerate(rte_ids):
         if not i % 100: print(i)
         rte_pts = assign_trip_to_backbone_grid(rte_id, locs, tree)
         grid_pts = add_rte_info_to_grid(grid_pts, rte_pts)

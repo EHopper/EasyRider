@@ -11,6 +11,66 @@ import sklearn.neighbors
 from util import config
 from util import mapping
 
+
+def get_features_from_rte_files(rte_ids):
+
+    trip_data = []
+    for i, rte_id in enumerate(rte_ids):
+        if not i % 1000: print(i)
+
+        rte_df = pd.read_feather(config.CLEAN_TRIPS_PATH + '{}.feather'.format(rte_id))
+        if rte_df.dist.sum() < 1:
+            continue
+
+        # Remove any trips that circle around too often
+        if 5 * mapping.dist_lat_lon(rte_df.lat.min(), rte_df.lon.min(), rte_df.lat.max(), rte_df.lon.max()) < rte_df.dist.sum():
+            continue
+
+        features = calc_features(rte_df, rte_id)
+
+        if (features['dist'] < 1
+            or 10 < features['avg_slope_climbing']
+            or features['avg_slope_descending'] < -10
+            or 25 < features['max_slope']
+            ):
+            continue
+
+
+        trip_data += [features]
+
+    res = pd.DataFrame(trip_data)
+    res.fillna(0, inplace=True)
+    res.to_feather(config.PROCESSED_DATA_PATH + 'trips_unscaled.feather')
+    return res
+
+def calc_features(rte_df, rte_id):
+
+    dist = rte_df.dist.sum()
+    max_slope = rte_df.slope.max()
+    avg_slope_climbing = rte_df[rte_df.slope > 1].slope.mean()
+    avg_slope_descending = rte_df[rte_df.slope < 1].slope.mean()
+    dist_climbing = rte_df[rte_df.slope > 3].dist.sum() / dist
+    dist_downhill = rte_df[rte_df.slope < -3].dist.sum() / dist
+    dist_6percent = rte_df[rte_df.slope > 6].dist.sum() / dist
+    dist_9percent = rte_df[rte_df.slope > 9].dist.sum() / dist
+    dist_12percent = rte_df[rte_df.slope > 12].dist.sum() / dist
+
+    if rte_df.time.max() == 0:
+        avg_speed = 0.
+    else:
+        avg_speed = rte_df[rte_df.speed > 2].speed.mean()
+
+    return {'rte_id': rte_id, 'dist': dist,
+            'avg_slope_climbing': avg_slope_climbing, 'avg_slope_descending': avg_slope_descending,
+            'max_slope': max_slope,
+            'dist_climbing': dist_climbing,
+            'dist_downhill': dist_downhill,
+            'dist_6percent': dist_6percent,
+            'dist_9percent': dist_9percent,
+            'dist_12percent': dist_12percent,
+            }
+
+
 def set_presets():
     df = pd.read_csv(config.PROCESSED_DATA_PATH + 'trips.csv')
 
@@ -29,21 +89,48 @@ def set_presets():
         'dist_6percent': [0.05, 0.05, 0.05, 0.05, 0.05, 0.05],
         'dist_9percent': [0.01, 0.01, 0.01, 0.01, 0.01, 0.01],
         'dist_12percent': [0.005, 0.005, 0.005, 0.005, 0.005, 0.005],
-        'avg_speed': [10., 8., 15., 18., 8., 15.],
+        'detour_score': [10, 10, 10, 10, 10, 10],
+        'popularity': [10, 10, 10, 10, 10, 10],
     })
 
     return presets, presets_descriptions
 
-def scale_dataset(df, column_importance):
+def engineer_features(df):
+
+    df_eng = df.copy()
+    df_eng['dist'] = np.log(df.dist +1e-2)
+    df_eng['dist_6percent'] = np.log(df.dist_6percent + 1e-2)
+    df_eng['dist_9percent'] = np.log(df.dist_9percent + 1e-2)
+    df_eng['dist_12percent'] = np.log(df.dist_12percent + 1e-2)
+
+    # df_eng.to_feather(config.PROCESSED_DATA_PATH + 'trips_eng.feather')
+    return df_eng
+
+def reverse_engineer_features(df):
+
+    df_reverse = df.copy()
+    df_reverse['dist'] = np.exp(df.dist) - 1e-2
+    df_reverse['dist_6percent'] = np.exp(df.dist_6percent) - 1e-2
+    df_reverse['dist_9percent'] = np.exp(df.dist_9percent) - 1e-2
+    df_reverse['dist_12percent'] = np.exp(df.dist_12percent) - 1e-2
+
+    return df_reverse
+
+
+def scale_dataset(df):
     # Scaling is ((X - mean) / std ) * column_importance
     scaler = sklearn.preprocessing.StandardScaler()
-    cols = df.columns
-    df[cols] = scaler.fit_transform(df[cols])
-    df[cols] *= column_importance
+    cols = df.columns.tolist()
+    if 'rte_id' in cols:
+        cols.remove('rte_id')
 
-    scaler_df = pd.DataFrame(np.vstack((scaler.mean_, scaler.scale_, column_importance)),
-                     columns=cols, index=['mean', 'std', 'column_importance'])
+    df[cols] = scaler.fit_transform(df[cols])
+
+    scaler_df = pd.DataFrame(np.vstack((scaler.mean_, scaler.scale_)),
+                     columns=cols, index=['mean', 'std'])
     scaler_df.reset_index().to_feather(config.MODEL_PATH + 'feature_scaling.feather')
+
+    df.to_feather(config.PROCESSED_DATA_PATH + 'trips_scaled.feather')
 
     return df
 
@@ -53,7 +140,7 @@ def remove_scaling(df):
     scaler = scaler.set_index('index')
     df_unscale = df.copy()
     for col in scaler.columns:
-        df_unscale[col] = (df_unscale[col] / scaler.loc['column_importance', col]
+        df_unscale[col] = (df_unscale[col]
                     * scaler.loc['std', col] + scaler.loc['mean', col])
 
     return df_unscale
@@ -65,8 +152,7 @@ def apply_scaling(df):
     df_scale = df.copy()
     for col in scaler.columns:
         df_scale[col] = ((df_scale[col] - scaler.loc['mean', col])
-                            / scaler.loc['std', col]
-                            * scaler.loc['column_importance', col])
+                            / scaler.loc['std', col])
 
     return df_scale
 
