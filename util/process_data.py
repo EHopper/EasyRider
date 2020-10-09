@@ -12,7 +12,7 @@ from util import config
 from util import mapping
 
 
-def get_features_from_rte_files(rte_ids):
+def get_features_from_rte_files(rte_ids, ifsave=False):
 
     trip_data = []
     for i, rte_id in enumerate(rte_ids):
@@ -40,7 +40,8 @@ def get_features_from_rte_files(rte_ids):
 
     res = pd.DataFrame(trip_data)
     res.fillna(0, inplace=True)
-    res.to_feather(config.PROCESSED_DATA_PATH + 'trips_unscaled.feather')
+    if ifsave:
+        res.to_feather(config.PROCESSED_DATA_PATH + 'trips_unscaled.feather')
     return res
 
 def calc_features(rte_df, rte_id):
@@ -72,7 +73,6 @@ def calc_features(rte_df, rte_id):
 
 
 def set_presets():
-    df = pd.read_csv(config.PROCESSED_DATA_PATH + 'trips.csv')
 
     presets_descriptions = [
         'Chilling out in the saddle', 'Pretty relaxed, with some climbing',
@@ -130,7 +130,7 @@ def scale_dataset(df):
                      columns=cols, index=['mean', 'std'])
     scaler_df.reset_index().to_feather(config.MODEL_PATH + 'feature_scaling.feather')
 
-    df.to_feather(config.PROCESSED_DATA_PATH + 'trips_scaled.feather')
+    # df.to_feather(config.PROCESSED_DATA_PATH + 'trips_scaled.feather')
 
     return df
 
@@ -200,7 +200,8 @@ def plot_NN(rte_ids, grid_pts, gridpts_at_rte, start_locs):
 
 
     route_layers = []
-    colours = sns.color_palette('husl', n_rides)
+    colours = sns.color_palette(["#7A2008", "#d4350b", "#ff5224",  "#b68679", "#df8770"])
+    # colours = sns.color_palette('husl', n_rides)
     map_lims = np.array([[90, -90, 180, -180]])
     for i, rte_id in enumerate(rte_ids):
         rte_layer, map_lims = load_rte_into_map_layer(rte_id, gridpts_at_rte, grid_pts, map_lims, colours[i])
