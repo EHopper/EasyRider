@@ -16,43 +16,25 @@ from util import config
 from util import mapping
 
 
-def load_clean_ridewgps_trips():
-    """
-    """
-    trips = pd.read_csv(config.RAW_DATA_PATH + 'ridewgps_trips.csv')
-    clean_ridewgps_rides(trips)
-    clean_trips(trips)
+def convert_ride_data_from_SI(ride_df):
 
-    return filter_trips(trips)
+    # Do unit conversion
+    ride_df['distance'] = mapping.metres_to_miles(ride_df['distance'])
+    ride_df['elevation_gain'] = mapping.metres_to_feet(ride_df['elevation_gain'])
+    ride_df['elevation_loss'] = mapping.metres_to_feet(ride_df['elevation_loss'])
 
-def load_ridewgps_allrides():
-    """ Load both trips and routes
+    ride_df['avg_slope'] = (mapping.feet_to_miles(ride_df['elevation_gain']
+                                                  + ride_df['elevation_loss'])
+                            / ride_df['distance'] * 100)
 
-    PROBLEM: routes are often copied, so have duplicated data.
-    Trips ONLY gives more of a heat map, rides people have actually done.
-    (Though also messier...)
-    """
-
-    trips = pd.read_csv(config.RAW_DATA_PATH + 'ridewgps_trips.csv')
-    routes = pd.read_csv(config.RAW_DATA_PATH + 'ridewgps_routes.csv')
+    if 'avg_speed' in ride_df.columns: # For trips, but not routes
+        ride_df['avg_speed'] = mapping.km_to_mi(ride_df['avg_speed'])
+        ride_df['max_speed'] = mapping.km_to_mi(ride_df['max_speed'])
+        ride_df['duration'] /= (60 * 60) # seconds to hours
+        ride_df['moving_time'] /= (60 * 60)
 
 
-    trips['is_trip'] = True
-    routes['is_trip'] = False
-
-    # Useful columns from trips
-    trips = clean_trips(trips)
-    routes['avg_speed'] = trips.avg_speed.mean()
-
-    # Excess columns in 'trips' are things like HR, cadence, time of day, etc
-    useless_cols =['Unnamed: 0', 'visibility', 'deleted_at',
-                   'postal_code', 'locality', 'administrative_area',
-                   'country_code', 'short_location']
-    common_cols = [col for col in trips.columns
-                    if col in routes.columns and col not in useless_cols]
-    return trips[common_cols].append(routes[common_cols]).reset_index(drop=True)
-
-def filter_trips(df):
+def filter_trips(ride_df):
     MIN_TIME = 0.5
     MAX_TIME = 15
     MIN_AVERAGE_SPEED = 5
@@ -60,17 +42,25 @@ def filter_trips(df):
     MAX_SPEED = 50
     MAX_DISTANCE = 125
     MAX_AVG_SLOPE = 12
+    MAX_RATIO_DIAGONAL_TO_TOTAL_DISTANCE = 4
 
-    return df[((df['is_stationary'] == False)
-               & (MIN_TIME < df['moving_time'])
-               & (df['moving_time'] < MAX_TIME)
-               & (MIN_TIME < df['duration'])
-               & (df['duration'] < MAX_TIME)
-               & (df['distance'] < MAX_DISTANCE)
-               & (MIN_AVERAGE_SPEED < df['avg_speed'])
-               & (df['avg_speed'] < MAX_AVERAGE_SPEED)
-               & (df['max_speed'] < MAX_SPEED)
-               & (df['avg_slope'] < MAX_AVG_SLOPE))].reset_index(drop=True)
+    # Want to remove any trips that loop around too much - these are often mountain bike routes
+    ride_df['diag_distance'] = mapping.dist_lat_lon(
+        ride_df.sw_lat, ride_df.sw_lng, ride_df.ne_lat, ride_df.ne_lng
+    )
+
+    return ride_df[((ride_df['is_stationary'] == False)
+                    & (MIN_TIME <= ride_df['moving_time'])
+                    & (ride_df['moving_time'] < MAX_TIME)
+                    & (MIN_TIME <= ride_df['duration'])
+                    & (ride_df['duration'] < MAX_TIME)
+                    & (ride_df['distance'] < MAX_DISTANCE)
+                    & (MIN_AVERAGE_SPEED <= ride_df['avg_speed'])
+                    & (ride_df['avg_speed'] <= MAX_AVERAGE_SPEED)
+                    & (ride_df['max_speed'] <= MAX_SPEED)
+                    & (ride_df['avg_slope'] <= MAX_AVG_SLOPE)
+                    & (ride_df['distance'] <= MAX_RATIO_DIAGONAL_TO_TOTAL_DISTANCE * ride_df['diag_distance'])
+                    )].reset_index(drop=True)
 
 def filter_cleaned_trips(df):
     feather_directory = pathlib.Path(config.CLEAN_TRIPS_PATH)
