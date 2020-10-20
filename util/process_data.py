@@ -12,25 +12,34 @@ from util import config
 from util import mapping
 
 
-def get_features_from_rte_files(rte_ids, ifsave=False):
+def get_features_from_rte_files(rte_ids):
+    """ Extract potentially relevant features from each ride.
 
+    The features are calculated by passing the ride dataframe to calc_features().  As this more detailed data is sometimes very noisy, we also do an additional filtering here, replicating the removal of outliers done in clean_data.filter_trips().
+
+    Arguments:
+        rte_ids
+            - list of integers
+            - The IDs of rides that we want to process, where rides are saved at
+                     config.CLEAN_TRIPS_PATH [rte_id].feather
+
+    Returns:
+        A dataframe of features
+            - pd.DataFrame
+            - Columns are 'rte_id' and a variety of summary features calculated for each ride in calc_features()
+    """
     trip_data = []
     for i, rte_id in enumerate(rte_ids):
         if not i % 1000: print(i)
+        rte = pd.read_feather(
+            os.path.join(config.CLEAN_TRIPS_PATH, '{}.feather'.format(rte_id))
+        )
 
-        rte_df = pd.read_feather(config.CLEAN_TRIPS_PATH + '{}.feather'.format(rte_id))
-        if rte_df.dist.sum() < 1:
-            continue
+        features = calc_features(rte, rte_id)
 
-        # Remove any trips that circle around too often
-        if 5 * mapping.dist_lat_lon(rte_df.lat.min(), rte_df.lon.min(), rte_df.lat.max(), rte_df.lon.max()) < rte_df.dist.sum():
-            continue
-
-        features = calc_features(rte_df, rte_id)
-
-        if (features['dist'] < 1
-            or 10 < features['avg_slope_climbing']
-            or features['avg_slope_descending'] < -10
+        if (features['dist'] < 1        # Do some filtering, as clean_data.filter_trips()
+            or 12 < features['avg_slope_climbing']
+            or features['avg_slope_descending'] < -12
             or 25 < features['max_slope']
             ):
             continue
@@ -38,28 +47,40 @@ def get_features_from_rte_files(rte_ids, ifsave=False):
 
         trip_data += [features]
 
-    res = pd.DataFrame(trip_data)
-    res.fillna(0, inplace=True)
-    if ifsave:
-        res.to_feather(config.PROCESSED_DATA_PATH + 'trips_unscaled.feather')
-    return res
+    return pd.DataFrame(trip_data).fillna(0)
 
 def calc_features(rte_df, rte_id):
+    """ Calculate some potentially important summary features of a ride.
+
+    Here, we calculate
+        dist:                   total length of a ride (miles)
+        max_slope:              maximum slope on a ride
+        avg_slope_climbing:     average slope when climbing, here defined as > 1% slope
+        avg_slope_descending:   average slope when descending,  < -1% slope
+        dist_climbing:          length of ride above a 3% slope (mi)
+        dist_downhill:          length of ride below a -3% slope (mi)
+        dist_6percent:          proportion of ride above a 6% climb
+        dist_9percent:          proportion of ride above a 9% climb
+        dist_12percent:         proportion of ride above a 12% climb
+
+    Arguments:
+        rte_df
+            - pd.DataFrame
+            - Units:    Imperial (miles, feet, miles per hour, hours)
+                        Degrees North and East
+                        Slope is given as a percentage
+    """
 
     dist = rte_df.dist.sum()
     max_slope = rte_df.slope.max()
     avg_slope_climbing = rte_df[rte_df.slope > 1].slope.mean()
-    avg_slope_descending = rte_df[rte_df.slope < 1].slope.mean()
+    avg_slope_descending = rte_df[rte_df.slope < -1].slope.mean()
     dist_climbing = rte_df[rte_df.slope > 3].dist.sum() / dist
     dist_downhill = rte_df[rte_df.slope < -3].dist.sum() / dist
     dist_6percent = rte_df[rte_df.slope > 6].dist.sum() / dist
     dist_9percent = rte_df[rte_df.slope > 9].dist.sum() / dist
     dist_12percent = rte_df[rte_df.slope > 12].dist.sum() / dist
 
-    if rte_df.time.max() == 0:
-        avg_speed = 0.
-    else:
-        avg_speed = rte_df[rte_df.speed > 2].speed.mean()
 
     return {'rte_id': rte_id, 'dist': dist,
             'avg_slope_climbing': avg_slope_climbing, 'avg_slope_descending': avg_slope_descending,

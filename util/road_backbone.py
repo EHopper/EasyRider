@@ -14,7 +14,55 @@ from util import mapping
 
 
 
-def make_road_backbone(rte_ids, grid_fname, rtes_at_grid_fname, pts_per_degree):
+def make_road_backbone(rte_ids, pts_per_degree):
+    """ Generate the road backbone, at a granularity specified by pts_per_degree
+
+    This generates a CLIQUE clustered road backbone by initialising a grid at the specified granularity (initialise_road_backbone_grid()), then sequentially loading in each ride from disk to calculate adjustments to the CLIQUE cluster centroids.
+
+    Note that all cluster assignments of ride lat/lon breadcrumbs is done on the initial grid - the updated location is only output at the end.  Therefore, ride locations will be assigned consistently even though they are loaded and processed one at a time.
+
+    At the moment, the LAT_RANGE and LON_RANGE are fixed at the start of this function, as all rides being processed are within a known, relatively small area (the eastern Catskills).
+
+    Arguments:
+        rte_ids
+            - list of integers
+            - The IDs of rides that we want to process, where rides are saved at
+                     config.CLEAN_TRIPS_PATH [rte_id].feather
+        pts_per_degree
+            - int
+            - Units:    1 / degree (North and East treated as if equal)
+            - Approximate grid spacing will be 1/pts_per_degree degrees
+
+    Returns:
+        grid_pts
+            - pd.DataFrame
+            - Columns are
+                - grid_id: unique ID for each grid point
+                    - int
+                    - Only grid points with at least one ride are included
+                    - Note that these will not be sequential as these are IDs from the original initialised grid
+                - 'lat': the weighted average latitude of each gridpoint across all rides
+                    - float, degrees N
+                - 'lon': the weighted average longitude of each gridpoint across all rides
+                    - float, degrees E
+                - 'breadcrumb_count': the number of lat/lon breadcrumbs contributing to each point
+                    - int
+                - 'n_routes': the number of unique rides passing through each grid point
+                    - int
+        rtes_at_grid
+            - pd.DataFrame
+            - Columns are
+                - grid_id: unique ID for each grid point (exactly as grid_id)
+                - rte_ids: list of rides that pass through that grid point
+                    - list of ints
+        gridpts_at_rte
+            - pd.DataFrame
+            - Columns are
+                - rte_id: unique ID for each ride, as input rte_ids
+                    - int
+                - grid_ids: list of grid point IDs that the ride passes through
+                    - list of ints
+    """
 
     LAT_RANGE = (40.5, 43.5)
     LON_RANGE = (-75.5, -72.5)
@@ -22,24 +70,26 @@ def make_road_backbone(rte_ids, grid_fname, rtes_at_grid_fname, pts_per_degree):
     tree = initialise_road_backbone_grid(pts_per_degree, LAT_RANGE, LON_RANGE)
 
     grid_pts = pd.DataFrame(columns=['grid_id', 'lat', 'lon', 'breadcrumb_count'])
-    grid_dict = collections.defaultdict(set)
+    grid_dict = collections.defaultdict(list)
+    gridpts_at_rte = []
     print('Looping through route IDs')
     for i, rte_id in enumerate(rte_ids):
-        if not i % 100: print(i)
+        if not i % 500: print(i)
         rte_pts = assign_trip_to_backbone_grid(rte_id, tree)
+        gridpts_at_rte += [{'rte_id': rte_id, 'grid_ids': rte_pts.grid_id.tolist()}]
         grid_pts = add_rte_info_to_grid(grid_pts, rte_pts)
         add_rte_info_to_grid_dict(grid_dict, rte_pts, rte_id)
 
     # Count the number of rides going through each grid point (location popularity)
     grid_pts['n_routes'] = [len(grid_dict[key]) for key in grid_dict]
-
+    rtes_at_grid = pd.DataFrame([
+        {'grid_id': k, 'rte_ids': list(v)} for k, v in grid_dict.items()
+    ])
+    gridpts_at_rte = pd.DataFrame(gridpts_at_rte)
     print('Total unique grid points: {}'.format(grid_pts.shape[0]))
-    # tidy_road_backbone(grid_pts, grid_dict, pts_per_degree)
-    # print('Merged points: {}'.format(grid_pts.shape[0]))
-    # save_gridpts(grid_pts, grid_dict, grid_fname + 'merged', rtes_at_grid_fname + 'merged')
 
 
-    return grid_pts, grid_dict
+    return grid_pts, rtes_at_grid, gridpts_at_rte
 
 def initialise_road_backbone_grid(pts_per_degree:int, lat_range:tuple, lon_range:tuple
                                  ) -> (sklearn.neighbors._kd_tree.KDTree, pd.DataFrame):
@@ -179,7 +229,7 @@ def add_rte_info_to_grid_dict(grid_dict:collections.defaultdict,
 
     Arguments:
         grid_dict
-            - collections.defaultdict (default value: empty set)
+            - collections.defaultdict (default value: empty list)
             - Keys in this dictionary are grid_ids (integers)
             - Values are a set of ride IDs (integers) for each grid point
         rte_pts
@@ -193,73 +243,4 @@ def add_rte_info_to_grid_dict(grid_dict:collections.defaultdict,
         grid_dict is updated in place
     """
     for grid_id in rte_pts['grid_id'].tolist():
-        grid_dict[grid_id].add(rte_id)
-
-def find_gridpts_at_rte(grid_dict, gridpts_at_rte_fname, pts_per_degree):
-
-    
-    rte_dict = collections.defaultdict(list)
-    for grid_id, rte_set in grid_dict.items():
-        for rte_id in rte_set:
-            rte_dict[rte_id] += [grid_id]
-
-    gridpts_at_rte = []
-    for k, v in rte_dict.items():
-        gridpts_at_rte += [{'rte_id': k, 'grid_ids': list(v)}]
-
-    gridpts_at_rte = pd.DataFrame(gridpts_at_rte)
-
-    return gridpts_at_rte
-
-
-
-def tidy_road_backbone(grid_pts, grid_dict, pts_per_degree):
-    """ Merge grid points that are closer together than some threshold
-    """
-    MIN_DISTANCE = 1/(2 * pts_per_degree) # in degrees
-
-    tree = sklearn.neighbors.KDTree(grid_pts[['lat', 'lon']])
-
-    grid_pts.reset_index(inplace=True)
-    print('Looping through grid points')
-    for ii, row in grid_pts.iterrows():
-
-        if not ii % 5000: print(ii)
-        if row['breadcrumb_count'] == 0: # If row has already been merged, skip it
-            continue
-
-            neighbours, _ = tree.query_radius(
-                row[['lat', 'lon']].values.reshape(1, -1), r=MIN_DISTANCE
-            )
-            neighbours = list(neighbours)
-            neighbours.remove(ii) # Take the point itself out of the list
-
-            for pt in neighbours:
-                id0 = int(grid_pts.at[ii, 'grid_id'])
-                id1 = int(grid_pts.at[ii, 'grid_id'])
-                ct0 = int(grid_pts.at[ii, 'breadcrumb_count'])
-                ct1 = int(grid_pts.at[ii, 'breadcrumb_count'])
-
-                if ct1 == 0: # If this point has already been merged to another
-                    continue
-
-                grid_pts.at[ii, 'lat'] = (
-                    (grid_pts.at[ii, 'lat'] * ct0 + grid_pts.at[pt, 'lat'] * ct1)
-                    / (ct0 + ct1)
-                )
-                grid_pts.at[ii, 'lon'] = (
-                    (grid_pts.at[ii, 'lon'] * ct0 + grid_pts.at[pt, 'lon'] * ct1)
-                    / (ct0 + ct1)
-                )
-                grid_pts.at[ii, 'breadcrumb_count'] = ct0 + ct1
-                grid_pts.at[pt, 'breadcrumb_count'] = 0 # Zero out other entry
-
-                # Merge the dictionary entry
-                grid_dict[id0] = grid_dict[id0].union(grid_dict[id1])
-                grid_dict[id1] = set() # Zero out the other entry
-
-                grid_pts.at[ii, 'n_routes'] = len(dict_m[id0])
-
-        zeroed = [k for k, v in grid_dict.items() if not v]
-        for k in zeroed:
-            del grid_dict[k]
+        grid_dict[grid_id] += [rte_id]
