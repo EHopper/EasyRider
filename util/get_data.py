@@ -199,12 +199,12 @@ def ridewithgps_api_ride(rte_id:int, ride_type:str, ifsave:bool=True) -> pd.Data
             - bool
             - Default:  True
             - If True, save the ride to
-                config.RAW_ROUTES_PATH + [rte_id].feather
+                config.RAW_[ROUTES|TRIPS]_PATH + [rte_id].feather
               and the whole binary response to
-                config.RAW_RIDEWGPS_PATH + route_[rte_id]
+                config.RAW_RIDEWGPS_PATH + [route|trip]_[rte_id]
 
     Returns:
-        rte_id
+        rte_df
             - pd.DataFrame
             - Units:    SI, degrees North and East
             - The 'track_points' of the ride are extracted and returned
@@ -253,7 +253,7 @@ def ridewithgps_api_ride(rte_id:int, ride_type:str, ifsave:bool=True) -> pd.Data
     return rte_df
 
 def write_ridewithgps_request(data, fname:str):
-    """ Save whole Ride With GPS API request file to disk
+    """ Save whole Ride With GPS API response file to disk
 
     Arguments:
         data

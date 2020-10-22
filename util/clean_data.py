@@ -28,6 +28,8 @@ def convert_ride_data_from_SI(ride_df):
 
 
 def filter_trips(ride_df):
+    """ TODO
+    """
     MIN_TIME = 0.5
     MAX_TIME = 15
     MIN_AVERAGE_SPEED = 5

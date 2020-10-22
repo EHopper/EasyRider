@@ -93,53 +93,84 @@ def calc_features(rte_df, rte_id):
             }
 
 
-def set_presets():
+def engineer_normal_features(df):
+    """ Engineer features that have a closer to normal distribution
 
-    presets_descriptions = [
-        'Chilling out in the saddle', 'Pretty relaxed, with some climbing',
-        'Half-day of touring', 'Training for VO2-max', 'Training for strength',
-        'Training for a century']
+    The features below have strong positive skew - try to remove by taking the log.
+    Note that have to add a small number because there are zeros in the dataset.
 
-    presets = pd.DataFrame({
-        'dist': [10., 15., 45., 20., 10., 85.],
-        'avg_slope_climbing': [3., 6., 5., 5., 8., 4.],
-        'avg_slope_descending': [-3., -6., -5., -5., -8., -4.],
-        'max_slope': [6., 10., 10., 6., 15., 10.],
-        'dist_climbing': [0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
-        'dist_downhill': [0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
-        'dist_6percent': [0.05, 0.05, 0.05, 0.05, 0.05, 0.05],
-        'dist_9percent': [0.01, 0.01, 0.01, 0.01, 0.01, 0.01],
-        'dist_12percent': [0.005, 0.005, 0.005, 0.005, 0.005, 0.005],
-        'detour_score': [10, 10, 10, 10, 10, 10],
-        'popularity': [10, 10, 10, 10, 10, 10],
-    })
+    Arguments:
+        df
+            - pd.DataFrame
+            - Assumed to have the following columns:
+                'dist', 'dist_6percent', 'dist_9percent', 'dist_12percent'
+              and that these are the only columns with a positive skewness
 
-    return presets, presets_descriptions
-
-def engineer_features(df):
+    Returns:
+        df_eng
+            - pd.DataFrame
+            - As input, but columns listed above have been replaced with their log
+    """
 
     df_eng = df.copy()
-    df_eng['dist'] = np.log(df.dist +1e-2)
-    df_eng['dist_6percent'] = np.log(df.dist_6percent + 1e-2)
-    df_eng['dist_9percent'] = np.log(df.dist_9percent + 1e-2)
-    df_eng['dist_12percent'] = np.log(df.dist_12percent + 1e-2)
+    skewed_cols = ['dist', 'dist_6percent', 'dist_9percent', 'dist_12percent']
 
-    # df_eng.to_feather(config.PROCESSED_DATA_PATH + 'trips_eng.feather')
+    for col in skewed_cols:
+        df_eng[col] = np.log(df[col] + 1e-2)
+
     return df_eng
 
 def reverse_engineer_features(df):
+    """ Undo the changes made in engineer_normal_features()
+
+    This is useful if you want to get the actual values back again, i.e. ride length not log(ride length) - for human interpretability.
+
+    Arguments:
+        df
+            - pd.DataFrame
+            - Assumed to have the following columns:
+                'dist', 'dist_6percent', 'dist_9percent', 'dist_12percent'
+              and that these are the only columns that were adjusted in engineer_normal_features()
+
+    Returns:
+        df_eng
+            - pd.DataFrame
+            - As input, but columns listed above have been replaced with their exponent
+    """
 
     df_reverse = df.copy()
-    df_reverse['dist'] = np.exp(df.dist) - 1e-2
-    df_reverse['dist_6percent'] = np.exp(df.dist_6percent) - 1e-2
-    df_reverse['dist_9percent'] = np.exp(df.dist_9percent) - 1e-2
-    df_reverse['dist_12percent'] = np.exp(df.dist_12percent) - 1e-2
+    skewed_cols = ['dist', 'dist_6percent', 'dist_9percent', 'dist_12percent']
+    for col in skewed_cols:
+        df_reverse[col] = np.exp(df[col]) - 1e-2
 
     return df_reverse
 
 
 def scale_dataset(df):
-    # Scaling is ((X - mean) / std ) * column_importance
+    """ Calculate appropriate scaling for the dataset using sklearn's StandardScaler
+
+    For the nearest-neighbours algorithm, want all features to be scaled equally as a baseline (we can then weight them differently from uniform).  We also need to be able to apply the same scaling to user inputs, so this data needs to be saved.
+
+    StandardScaler in sklearn demeans and is normalised by the standard deviation
+            ((X - mean) / std)
+
+    Arguments:
+        df
+            - pd.DataFrame
+            - Features are all assumed to be numeric and approximately normal
+
+    Returns:
+        df
+            - pd.DataFrame
+            - Features are demeaned and scaled to unit standard deviation
+        scaler_df
+            - pd.DataFrame
+            - Columns are the same as the input df (except for 'rte_id', which is skipped if present)
+            - Rows are indexed as 'mean' and 'std'
+                - the mean and standard deviation calculated by StandardScaler
+
+    """
+    # Scaling is ((X - mean) / std )
     scaler = sklearn.preprocessing.StandardScaler()
     cols = df.columns.tolist()
     if 'rte_id' in cols:
@@ -149,15 +180,37 @@ def scale_dataset(df):
 
     scaler_df = pd.DataFrame(np.vstack((scaler.mean_, scaler.scale_)),
                      columns=cols, index=['mean', 'std'])
-    scaler_df.reset_index().to_feather(config.MODEL_PATH + 'feature_scaling.feather')
 
-    # df.to_feather(config.PROCESSED_DATA_PATH + 'trips_scaled.feather')
-
-    return df
+    return df, scaler_df
 
 def remove_scaling(df):
-    # Scaling is ((X - mean) / std ) * column_importance
-    scaler = pd.read_feather(config.MODEL_PATH + 'feature_scaling.feather')
+    """ Undo the scaling done in scale_dataset() or apply_scaling()
+
+    This is used to increase human readability on scaled datasets.
+
+    NOTE: it is assumed that the appropriate scaling dataframe will be saved at
+                config.MODEL_PATH 'feature_scaling.feather'
+    This dataframe should have n_scaled_features + 1 columns and two rows:
+        'index':  values are strings, 'mean' and 'std'
+        All other column names should be a subset of the columns in the input df, where the first row is the mean and the second row is the standard deviation.
+
+    Arguments:
+        df
+            - pd.DataFrame
+            - Unitless, as these have all been normalised
+            - Columns should be a superset of the columns in 'feature_scaling.feather', other than the 'index' column
+
+    Returns:
+        df_unscale
+            - pd.DataFrame
+            - Units:    back to what they should be!
+            - All columns in 'feature_scaling.feather' are unscaled
+                    i.e. X * std + mean
+
+    """
+    scaler = pd.read_feather(
+        os.path.join(config.MODEL_PATH, 'feature_scaling.feather')
+    )
     scaler = scaler.set_index('index')
     df_unscale = df.copy()
     for col in scaler.columns:
@@ -167,8 +220,32 @@ def remove_scaling(df):
     return df_unscale
 
 def apply_scaling(df):
-    # Scaling is ((X - mean) / std ) * column_importance
-    scaler = pd.read_feather(config.MODEL_PATH + 'feature_scaling.feather')
+    """ Apply the scaling calculated in scale_dataset()
+
+    This is used to ensure user inputs or other new datasets are scaled in the same way.
+
+    NOTE: it is assumed that the appropriate scaling dataframe will be saved at
+                config.MODEL_PATH 'feature_scaling.feather'
+    This dataframe should have n_scaled_features + 1 columns and two rows:
+        'index':  values are strings, 'mean' and 'std'
+        All other column names should be a subset of the columns in the input df, where the first row is the mean and the second row is the standard deviation.
+
+    Arguments:
+        df
+            - pd.DataFrame
+            - Columns should be a superset of the columns in 'feature_scaling.feather', other than the 'index' column
+
+    Returns:
+        df_scale
+            - pd.DataFrame
+            - Units:    unitless!
+            - All columns in 'feature_scaling.feather' are unscaled
+                    i.e. (X - mean) / std
+    """
+
+    scaler = pd.read_feather(
+        os.path.join(config.MODEL_PATH, 'feature_scaling.feather')
+    )
     scaler = scaler.set_index('index')
     df_scale = df.copy()
     for col in scaler.columns:
