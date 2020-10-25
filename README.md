@@ -43,3 +43,14 @@ Using a coarse grid for customised CLIQUE clustering, we can create a one-hot en
 Note that about 65% of rides get removed in this process!  It is worth deduping before doing any other processing :)
 
 ### 03. Feature Engineering
+I took two main lines of attack, here.
+
+1. Ride difficulty features
+
+I have data on the length of the ride and the amount of elevation climbed in the ride.  Together, these represent ride difficulty.  However, it is not just as simple as just taking these two features!  How exactly the horizontal and vertical distances are combined is very important!  Clearly, a ride that is flat with a relatively short section at 20% slope is going to be much harder than a ride that is 5% for 4 times as long - yet both have the same distance travelled, the same elevation gain, the same average slope.
+
+At this stage, I just generated about 10 features based on my domain knowledge that I thought might be able to describe ride difficulty.
+
+2. Ride niceness features
+
+I can look at how popular different 
